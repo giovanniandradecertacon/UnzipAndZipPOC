@@ -1,0 +1,4 @@
+server:
+  port: 8094
+  servlet:
+    context-path: /pocZip
