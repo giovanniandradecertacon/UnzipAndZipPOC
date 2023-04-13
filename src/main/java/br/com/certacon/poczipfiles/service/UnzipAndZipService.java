@@ -1,8 +1,8 @@
 package br.com.certacon.poczipfiles.service;
 
-import com.github.junrar.Archive;
-import com.github.junrar.exception.RarException;
-import com.github.junrar.rarfile.FileHeader;
+import br.com.certacon.poczipfiles.model.ZipModel;
+import br.com.certacon.poczipfiles.repository.ZipRepository;
+import br.com.certacon.poczipfiles.utils.StatusZip;
 import org.apache.commons.io.FilenameUtils;
 import org.springframework.stereotype.Service;
 
@@ -19,71 +19,10 @@ import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 
 @Service
 public class UnzipAndZipService {
+    private final ZipRepository zipRepository;
 
-    public static void extractZip(File zipFile, File outputFolder) throws IOException {
-        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile))) {
-            ZipEntry entry = zis.getNextEntry();
-            while (entry != null) {
-                String entryName = entry.getName();
-                File entryFile = new File(outputFolder, entryName);
-                if (entry.isDirectory()) {
-                    entryFile.mkdirs();
-
-                } else if (FilenameUtils.getExtension(entryName).equals("zip")) {
-                    entryFile.getParentFile().mkdirs();
-                    extractFile(zis, entryFile);
-                    extractZip(entryFile, outputFolder);
-                } else {
-                    entryFile.getParentFile().mkdirs();
-                    extractFile(zis, entryFile);
-                }
-                entry = zis.getNextEntry();
-            }
-        }
-    }
-
-    private static void extractFolder(File folder, File destDir) throws IOException {
-        File[] files = folder.listFiles();
-        for (File file : files) {
-            Path filePath = Path.of(file.getPath());
-            if (FilenameUtils.getExtension(file.getName()).equals("zip")) {
-                Path destPath = Path.of(destDir.getPath() + "\\" + file.getName());
-
-                Files.move(filePath, destPath, ATOMIC_MOVE);
-            }
-            if (file.isFile()) {
-                Path parentFolder = Path.of(folder.getParentFile().toPath() + "\\" + file.getName());
-
-                Files.move(filePath, parentFolder, ATOMIC_MOVE);
-            }
-        }
-        deleteFolder(folder);
-
-    }
-
-    private static void moveZip(File sourceDir, File destDir) throws IOException {
-        File[] fileList = sourceDir.listFiles();
-        Files.move(Path.of(fileList[0].getPath()), destDir.toPath());
-        fileList[0].delete();
-    }
-
-    private static void extractLoop(File[] sourceDirList, File destDir) throws IOException {
-        for (int i = 0; i < sourceDirList.length; i++) {
-            extractZip(sourceDirList[i], destDir);
-        }
-    }
-
-    private static void deleteFolder(File folder) throws IOException {
-        if (folder.isDirectory()) {
-            File[] files = folder.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    deleteFolder(file);
-
-                }
-            }
-        }
-        Files.deleteIfExists(folder.toPath());
+    public UnzipAndZipService(ZipRepository zipRepository) {
+        this.zipRepository = zipRepository;
     }
 
     private static void extractFile(InputStream inputStream, File outputFile) throws IOException {
@@ -106,23 +45,6 @@ public class UnzipAndZipService {
 
     private static boolean isRarFile(File file) {
         return FilenameUtils.getExtension(file.getName()).equals("rar");
-    }
-
-    public static List<String> listFiles(File file, boolean extract) throws IOException {
-        List<String> files = new ArrayList<>();
-        if (isArchiveFile(file)) {
-            if (isZipFile(file)) {
-                files.addAll(listZipFiles(file, extract));
-            } else if (isRarFile(file)) {
-                files.addAll(listRarFiles(file, extract));
-            } else {
-                throw new UnsupportedOperationException("Unsupported archive format");
-            }
-        } else {
-            files.add(file.getName());
-        }
-        System.out.println(files);
-        return files;
     }
 
     private static List<String> listZipFiles(File file, boolean extract) throws IOException {
@@ -150,66 +72,140 @@ public class UnzipAndZipService {
         return files;
     }
 
-    private static List<String> listRarFiles(File file, boolean extract) throws IOException {
-        List<String> files = new ArrayList<>();
-        try (Archive archive = new Archive(new FileInputStream(file))) {
-            FileHeader fileHeader = archive.nextFileHeader();
-            while (fileHeader != null) {
-                if (!fileHeader.isDirectory()) {
-                    String fileName = fileHeader.getFileNameString().trim();
-                    files.add(fileName);
-                    if (extract) {
-                        try (FileOutputStream fos = new FileOutputStream(new File(file.getParent(), fileName))) {
-                            archive.extractFile(fileHeader, fos);
-                        } catch (RarException e) {
-                            e.printStackTrace();
-                        }
-                    }
-                }
-                fileHeader = archive.nextFileHeader();
+    private StatusZip extractFolder(File directory, File destDir) throws IOException {
+        File[] directoryList = readFolder(directory);
+        for (File file : directoryList) {
+            Path filePath = Path.of(file.getPath());
+            if (file.isDirectory()) extractFolder(file, destDir);
+            if (FilenameUtils.getExtension(file.getName()).equals("zip")) {
+                Path destPath = Path.of(destDir.getPath() + "\\" + file.getName());
+                Files.move(filePath, destPath, ATOMIC_MOVE);
+            } else {
+                Path parentFolder = Path.of(file.getParentFile() + "\\" + file.getName());
+
+                Files.move(filePath, parentFolder, ATOMIC_MOVE);
+
             }
-        } catch (RarException e) {
-            throw new RuntimeException(e);
+
         }
-        return files;
+
+        return StatusZip.MOVED;
     }
 
-    public List<String> UnzipFiles(File path) throws IOException {
+    private Boolean deleteFolders(File directory) throws IOException {
+        File[] files = readFolder(directory);
+        if (files != null) {
+            for (File file : files) {
+                if (directory.isDirectory()) Files.deleteIfExists(file.toPath());
+            }
+        }
 
-        Path compactedDir = Path.of("D:\\BASE TESTES AUTOMAÇÃO\\Compactados");
-        Path descompactedDir = Path.of("D:\\BASE TESTES AUTOMAÇÃO\\Descompactados");
+        return Boolean.TRUE;
+    }
+
+    private Boolean deleteFile(File fileToDelete) throws IOException {
+        Files.deleteIfExists(Path.of(fileToDelete.getPath()));
+        return Boolean.TRUE;
+    }
+
+    private File[] readFolder(File folderPath) {
+        File[] sourceFiles = folderPath.listFiles();
+        return sourceFiles;
+    }
+
+    private StatusZip moveFile(File fileToMove, Path destiny) throws IOException {
+        Files.move(Path.of(fileToMove.getPath()), destiny, ATOMIC_MOVE);
+        return StatusZip.MOVED;
+    }
+
+    private Path createDirectory(Path directory) throws IOException {
+        if (!directory.toFile().exists()) Files.createDirectory(directory);
+        return directory;
+    }
+
+    private StatusZip unzipFile(File toDescompact, Path destinyDir) {
+        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(toDescompact))) {
+            ZipEntry entry = zis.getNextEntry();
+            while (entry != null) {
+                String entryName = entry.getName();
+                File entryFile = new File(destinyDir.toFile(), entryName);
+                if (entry.isDirectory()) {
+                    File[] fileList = readFolder(entryFile);
+                    for (File file : fileList) {
+                        if (FilenameUtils.getExtension(file.getName()).equals("zip")) unzipFile(file, destinyDir);
+                    }
+
+                } else if (FilenameUtils.getExtension(entryName).equals("zip")) {
+                    entryFile.getParentFile().mkdirs();
+                    extractFile(zis, entryFile);
+                    unzipFile(entryFile, destinyDir);
+                } else {
+                    entryFile.getParentFile().mkdirs();
+                    extractFile(zis, entryFile);
+                }
+                entry = zis.getNextEntry();
+            }
+        } catch (FileNotFoundException e) {
+            throw new RuntimeException(e);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        return StatusZip.UNZIPPED;
+    }
+
+    public List<String> UnzipFiles(ZipModel zipModel) throws IOException {
+        Path uuidFile = Path.of("D:\\" + zipModel.getId().toString());
+        Path compactedDir = Path.of(uuidFile + "\\Compactados");
+        Path descompactedDir = Path.of(uuidFile + "\\Descompactados");
         File[] compactedList;
+        File[] pathList;
 
         do {
-            File[] pathList = path.listFiles();
-            if (!compactedDir.toFile().exists()) Files.createDirectory(compactedDir);
-            if (!descompactedDir.toFile().exists()) Files.createDirectory(descompactedDir);
+            pathList = readFolder(new File(zipModel.getSourceFile().getPath()));
+
+            uuidFile = createDirectory(uuidFile);
+            compactedDir = createDirectory(compactedDir);
+            descompactedDir = createDirectory(descompactedDir);
 
             if (pathList.length > 0) {
                 if (FilenameUtils.getExtension(pathList[0].getName()).equals("zip")) {
-                    moveZip(path, new File(compactedDir.toFile() + "\\" + pathList[0].getName()));
+                    Path movedFilePath = Path.of(compactedDir + "\\" + pathList[0].getName());
+                    StatusZip moveStatus = moveFile(pathList[0], movedFilePath);
+                    zipModel.setZipStatus(moveStatus);
+                    if (zipModel.getZipStatus().equals(StatusZip.MOVED)) {
+                        StatusZip unzipStatus = unzipFile(movedFilePath.toFile(), descompactedDir);
+                        zipModel.setZipStatus(unzipStatus);
+                    }
+                    if (zipModel.getZipStatus().equals(StatusZip.UNZIPPED)) {
+                        deleteFile(movedFilePath.toFile());
+                    }
                 }
+
             }
 
-            compactedList = compactedDir.toFile().listFiles();
-            extractLoop(compactedList, descompactedDir.toFile());
+        } while (readFolder(new File(zipModel.getSourceFile().getPath())).length > 0);
 
-
-            File[] descompactedList = descompactedDir.toFile().listFiles();
+        do {
+            File[] descompactedList = readFolder(descompactedDir.toFile());
+            for (int i = 0; i < descompactedList.length; i++) {
+                if (descompactedList[i].isDirectory()) {
+                    extractFolder(descompactedList[i], compactedDir.toFile());
+                    deleteFolders(descompactedList[i]);
+                }
+            }
             for (int i = 0; i < descompactedList.length; i++) {
                 if (FilenameUtils.getExtension(descompactedList[i].getName()).equals("zip")) {
-
-                    Files.move(descompactedDir, compactedDir, ATOMIC_MOVE);
-                    descompactedList = descompactedDir.toFile().listFiles();
-                } else if (descompactedList[i].isDirectory()) {
-                    extractFolder(descompactedList[i], compactedDir.toFile());
+                    moveFile(descompactedList[i], compactedDir).equals(StatusZip.MOVED);
                 }
             }
+            compactedList = readFolder(compactedDir.toFile());
+            for (int k = 0; k < compactedList.length; k++) {
+                unzipFile(compactedList[k], descompactedDir);
+            }
 
-            compactedList = compactedDir.toFile().listFiles();
         } while (compactedList.length != 0);
 
-        return listFiles(compactedDir.toFile(), true);
-
+        return null;
     }
 }
+
