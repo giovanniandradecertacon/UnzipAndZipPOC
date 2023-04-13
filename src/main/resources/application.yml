@@ -1,4 +1,16 @@
 server:
-  port: 8094
+  port: 8099
   servlet:
     context-path: /pocZip
+
+spring:
+  application:
+    name: LoadFile
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: create
+  datasource:
+    url: jdbc:sqlserver://192.168.0.61;databaseName=PocZip;encrypt=false;integratedSecurity=false;
+    username: giovanni.andrade
+    password: gigi1704
